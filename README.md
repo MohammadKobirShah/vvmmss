@@ -64,9 +64,9 @@ sudo apt install -y fzf
 
 ### 1. Get the script
 ```bash
-git clone https://raw.githubusercontent.com/MohammadKobirShah/vvmmss/refs/heads/main/vm.sh
-cd <your-re
-chmod +x kobir-multi-vm.sh
+git clone https://github.com/MohammadKobirShah/vvmmss.git
+cd vvmmss
+chmod +x Kobir-Multi-VM.sh
 ```
 
 ### 2. Run it
