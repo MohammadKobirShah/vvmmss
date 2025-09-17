@@ -62,18 +62,19 @@ check_dependencies() {
     fi
 }
 
-# === Choose install path with fallback ===
+# === Choose install path ===
 choose_location(){
   print_status INFO "Available partitions:"
   if command -v lsblk >/dev/null 2>&1; then
       lsblk -o NAME,MOUNTPOINT,SIZE | grep -E '/'
   else
-      df -h | awk '{print $1, $6, $2}' | column -t
+      df -h | awk '{printf "%-20s %-20s %s\n", $1, $6, $2}'
   fi
   echo
   read -p "$(print_status INPUT 'Enter install path (default ~/vms): ')" PATHSEL
   [[ -z $PATHSEL ]] && VM_DIR="$HOME/vms" || VM_DIR="$PATHSEL"
-  mkdir -p "$VM_DIR"; print_status SUCCESS "Using VM dir: $VM_DIR"
+  mkdir -p "$VM_DIR"
+  print_status SUCCESS "Using VM dir: $VM_DIR"
 }
 
 # === VM configs ===
@@ -127,6 +128,7 @@ create_new_vm(){
   for os in "${!OS_OPTIONS[@]}"; do echo " $i) $os"; keys[$i]="$os"; ((i++)); done
   read -p "$(print_status INPUT 'Choice: ')" pick
   local sel="${keys[$pick]}"; IFS="|" read -r OS_TYPE CODENAME IMG_URL DEF_HOST DEF_USER DEF_PASS <<<"${OS_OPTIONS[$sel]}"
+
   read -p "$(print_status INPUT "VM name (default $DEF_HOST): ")" VM_NAME; VM_NAME=${VM_NAME:-$DEF_HOST}
   read -p "$(print_status INPUT "Hostname (default $VM_NAME): ")" HOSTNAME; HOSTNAME=${HOSTNAME:-$VM_NAME}
   read -p "$(print_status INPUT "Username (default $DEF_USER): ")" USERNAME; USERNAME=${USERNAME:-$DEF_USER}
@@ -170,7 +172,7 @@ EOF
   save_vm_config
 }
 
-# === Start VM ===
+# === Start/Stop VM ===
 start_vm(){
   load_vm_config "$1" || return
   if [[ $OS_TYPE == "proxmox" ]]; then
@@ -217,7 +219,7 @@ while true; do
 done
 }
 
+# === Start script ===
 check_dependencies
-VM_DIR="$HOME/vms"
-mkdir -p "$VM_DIR"
+VM_DIR="$HOME/vms"; mkdir -p "$VM_DIR"
 main_menu
