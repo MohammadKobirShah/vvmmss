@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# ============================
-#   Enhanced Multi-VM Manager
-# ============================
+# =========================================================
+#       KOBIR Enhanced Multi-VM Manager (QEMU/KVM)
+# =========================================================
 
 # === Colors ===
 RED="\e[31m"; GREEN="\e[32m"; YELLOW="\e[33m"
@@ -62,11 +62,47 @@ check_dependencies() {
     fi
 }
 
-# === Paths ===
-VM_DIR="${VM_DIR:-$HOME/vms}"
-mkdir -p "$VM_DIR"
+# === Choose install path with fallback ===
+choose_location(){
+  print_status INFO "Available partitions:"
+  if command -v lsblk >/dev/null 2>&1; then
+      lsblk -o NAME,MOUNTPOINT,SIZE | grep -E '/'
+  else
+      df -h | awk '{print $1, $6, $2}' | column -t
+  fi
+  echo
+  read -p "$(print_status INPUT 'Enter install path (default ~/vms): ')" PATHSEL
+  [[ -z $PATHSEL ]] && VM_DIR="$HOME/vms" || VM_DIR="$PATHSEL"
+  mkdir -p "$VM_DIR"; print_status SUCCESS "Using VM dir: $VM_DIR"
+}
 
-# === OS OPTIONS (11 distros + Proxmox) ===
+# === VM configs ===
+get_vm_list(){ find "$VM_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort; }
+load_vm_config(){ local vm=$1; local cfg="$VM_DIR/$vm.conf"; [[ -f $cfg ]] && source "$cfg" || { print_status ERROR "Config not found"; return 1; }; }
+save_vm_config(){
+  local cf="$VM_DIR/$VM_NAME.conf"
+  cat > "$cf" <<EOF
+VM_NAME="$VM_NAME"
+OS_TYPE="$OS_TYPE"
+CODENAME="$CODENAME"
+IMG_URL="$IMG_URL"
+HOSTNAME="$HOSTNAME"
+USERNAME="$USERNAME"
+PASSWORD="$PASSWORD"
+DISK_SIZE="$DISK_SIZE"
+MEMORY="$MEMORY"
+CPUS="$CPUS"
+SSH_PORT="$SSH_PORT"
+GUI_MODE="$GUI_MODE"
+PORT_FORWARDS="$PORT_FORWARDS"
+IMG_FILE="$IMG_FILE"
+SEED_FILE="$SEED_FILE"
+CREATED="$(date)"
+EOF
+  print_status SUCCESS "Saved config: $cf"
+}
+
+# === Distro list ===
 declare -A OS_OPTIONS=(
  ["Ubuntu 22.04"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
  ["Ubuntu 24.04"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
@@ -83,76 +119,35 @@ declare -A OS_OPTIONS=(
  ["Proxmox VE 8.2"]="proxmox|iso|https://enterprise.proxmox.com/iso/proxmox-ve_8.2-iso.iso|proxmox|root|root"
 )
 
-# === Helper functions ===
-get_vm_list(){ find "$VM_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort; }
-
-load_vm_config(){
-  local vm=$1; local cfg="$VM_DIR/$vm.conf"
-  [[ -f $cfg ]] && source "$cfg" || { print_status ERROR "Config for $vm not found"; return 1; }
-}
-
-save_vm_config(){
-  local cf="$VM_DIR/$VM_NAME.conf"
-  cat > "$cf" <<EOF
-VM_NAME="$VM_NAME"
-OS_TYPE="$OS_TYPE"
-CODENAME="$CODENAME"
-IMG_URL="$IMG_URL"
-HOSTNAME="$HOSTNAME"
-USERNAME="$USERNAME"
-PASSWORD="$PASSWORD"
-DISK_SIZE="$DISK_SIZE"
-MEMORY="$MEMORY"
-CPUS="$CPUS"
-SSH_PORT="$SSH_PORT"
-IMG_FILE="$IMG_FILE"
-SEED_FILE="$SEED_FILE"
-CREATED="$(date)"
-EOF
-  print_status SUCCESS "Saved config: $cf"
-}
-
-choose_location(){
-  print_status INFO "Available partitions:";
-  lsblk -o NAME,MOUNTPOINT,SIZE | grep -E '/'; echo
-  read -p "$(print_status INPUT 'Enter install path (default: ~/vms): ')" PATHSEL
-  [[ -z $PATHSEL ]] && VM_DIR="$HOME/vms" || VM_DIR="$PATHSEL"
-  mkdir -p "$VM_DIR"; print_status SUCCESS "Using VM dir: $VM_DIR"
-}
-
-# === VM Creation ===
+# === Create VM ===
 create_new_vm(){
   choose_location
-  print_status INFO "Select OS:"
+  echo "Available OS:"
   local i=1; local -a keys
-  for os in "${!OS_OPTIONS[@]}"; do echo "  $i) $os"; keys[$i]="$os"; ((i++)); done
+  for os in "${!OS_OPTIONS[@]}"; do echo " $i) $os"; keys[$i]="$os"; ((i++)); done
   read -p "$(print_status INPUT 'Choice: ')" pick
-  local sel="${keys[$pick]}"; IFS="|" read -r OS_TYPE CODENAME IMG_URL DEFAULT_HOSTNAME DEFAULT_USER DEFAULT_PASS <<<"${OS_OPTIONS[$sel]}"
-  [[ -z $sel ]] && { print_status ERROR "Invalid"; return; }
-
-  read -p "$(print_status INPUT "VM name (default: $DEFAULT_HOSTNAME): ")" VM_NAME; VM_NAME=${VM_NAME:-$DEFAULT_HOSTNAME}
-  read -p "$(print_status INPUT "Hostname (default: $VM_NAME): ")" HOSTNAME; HOSTNAME=${HOSTNAME:-$VM_NAME}
-  read -p "$(print_status INPUT "Username (default: $DEFAULT_USER): ")" USERNAME; USERNAME=${USERNAME:-$DEFAULT_USER}
-  read -s -p "$(print_status INPUT "Password (default: $DEFAULT_PASS): ")" PASSWORD; echo; PASSWORD=${PASSWORD:-$DEFAULT_PASS}
+  local sel="${keys[$pick]}"; IFS="|" read -r OS_TYPE CODENAME IMG_URL DEF_HOST DEF_USER DEF_PASS <<<"${OS_OPTIONS[$sel]}"
+  read -p "$(print_status INPUT "VM name (default $DEF_HOST): ")" VM_NAME; VM_NAME=${VM_NAME:-$DEF_HOST}
+  read -p "$(print_status INPUT "Hostname (default $VM_NAME): ")" HOSTNAME; HOSTNAME=${HOSTNAME:-$VM_NAME}
+  read -p "$(print_status INPUT "Username (default $DEF_USER): ")" USERNAME; USERNAME=${USERNAME:-$DEF_USER}
+  read -s -p "$(print_status INPUT "Password (default $DEF_PASS): ")" PASSWORD; echo; PASSWORD=${PASSWORD:-$DEF_PASS}
   read -p "$(print_status INPUT 'Disk size (default 20G): ')" DISK_SIZE; DISK_SIZE=${DISK_SIZE:-20G}
   read -p "$(print_status INPUT 'Memory MB (default 2048): ')" MEMORY; MEMORY=${MEMORY:-2048}
   read -p "$(print_status INPUT 'CPUs (default 2): ')" CPUS; CPUS=${CPUS:-2}
   read -p "$(print_status INPUT 'SSH Port (default 2222): ')" SSH_PORT; SSH_PORT=${SSH_PORT:-2222}
+  read -p "$(print_status INPUT 'Enable GUI? (y/n): ')" g; GUI_MODE=false; [[ $g =~ ^[Yy]$ ]] && GUI_MODE=true
+  read -p "$(print_status INPUT 'Extra port forwards (e.g 8080:80,comma): ')" PORT_FORWARDS
 
   local vm_path="$VM_DIR/$VM_NAME"; mkdir -p "$vm_path"
   IMG_FILE="$vm_path/disk.qcow2"; SEED_FILE="$vm_path/seed.iso"
 
   if [[ $OS_TYPE == "proxmox" ]]; then
-    print_status INFO "Downloading Proxmox ISO..."
     wget -q "$IMG_URL" -O "$vm_path/proxmox.iso"
     qemu-img create -f qcow2 "$IMG_FILE" "$DISK_SIZE"
   else
-    print_status INFO "Downloading image..."
     wget -q "$IMG_URL" -O "$vm_path/base.img"
     qemu-img convert -O qcow2 "$vm_path/base.img" "$IMG_FILE"
     qemu-img resize "$IMG_FILE" "$DISK_SIZE"
-
-    # Cloud-init
     cat > user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
@@ -175,15 +170,16 @@ EOF
   save_vm_config
 }
 
-# === VM Control ===
-start_vm(){ load_vm_config "$1" || return; print_status INFO "Starting $VM_NAME"; 
+# === Start VM ===
+start_vm(){
+  load_vm_config "$1" || return
   if [[ $OS_TYPE == "proxmox" ]]; then
-    qemu-system-x86_64 -enable-kvm -m "$MEMORY" -smp "$CPUS" -cpu host \
+    qemu-system-x86_64 -enable-kvm -m "$MEMORY" -smp "$CPUS" \
     -drive file="$IMG_FILE",format=qcow2 \
     -cdrom "$VM_DIR/$VM_NAME/proxmox.iso" -boot d \
     -netdev user,id=n0,hostfwd=tcp::$SSH_PORT-:22 -device virtio-net-pci,netdev=n0
   else
-    qemu-system-x86_64 -enable-kvm -m "$MEMORY" -smp "$CPUS" -cpu host \
+    qemu-system-x86_64 -enable-kvm -m "$MEMORY" -smp "$CPUS" \
     -drive file="$IMG_FILE",format=qcow2,if=virtio \
     -drive file="$SEED_FILE",format=raw,if=virtio \
     -netdev user,id=n0,hostfwd=tcp::$SSH_PORT-:22 -device virtio-net-pci,netdev=n0 \
@@ -191,11 +187,12 @@ start_vm(){ load_vm_config "$1" || return; print_status INFO "Starting $VM_NAME"
   fi
 }
 
-stop_vm(){ load_vm_config "$1" || return; pkill -f "qemu-system-x86_64.*$IMG_FILE" && print_status SUCCESS "Stopped $VM_NAME"; }
-delete_vm(){ load_vm_config "$1" || return; rm -rf "$VM_DIR/$VM_NAME.*" "$VM_DIR/$VM_NAME"; print_status SUCCESS "Deleted $VM_NAME"; }
+stop_vm(){ load_vm_config "$1" && pkill -f "qemu-system-x86_64.*$IMG_FILE" && print_status SUCCESS "Stopped $VM_NAME"; }
+delete_vm(){ load_vm_config "$1" && rm -rf "$VM_DIR/$VM_NAME"* && print_status SUCCESS "Deleted $VM_NAME"; }
 show_vm_info(){ load_vm_config "$1" && cat "$VM_DIR/$1.conf"; }
-resize_vm_disk(){ load_vm_config "$1" || return; read -p "New size: " sz; qemu-img resize "$IMG_FILE" "$sz"; }
-show_vm_performance(){ load_vm_config "$1" || return; pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE") && top -p $pid || echo "Not running"; }
+resize_vm_disk(){ load_vm_config "$1" && read -p "New size: " sz && qemu-img resize "$IMG_FILE" "$sz"; }
+show_vm_performance(){ load_vm_config "$1" && pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE") && top -p $pid || echo "Not running"; }
+edit_vm_config(){ nano "$VM_DIR/$1.conf"; }
 
 # === Menu ===
 main_menu(){
@@ -203,7 +200,7 @@ while true; do
  display_header
  vms=($(get_vm_list)); vc=${#vms[@]}
  [ $vc -gt 0 ] && { print_status INFO "VMs: ${vms[*]}"; }
- echo "1) Create VM"; [ $vc -gt 0 ] && echo "2) Start VM" && echo "3) Stop VM" && echo "4) Show VM info" && echo "5) Delete VM" && echo "6) Resize VM disk" && echo "7) Show VM performance"
+ echo "1) Create VM"; [ $vc -gt 0 ] && echo "2) Start VM" && echo "3) Stop VM" && echo "4) Info" && echo "5) Edit Config" && echo "6) Delete" && echo "7) Resize" && echo "8) Performance"
  echo "0) Exit"
  read -p "$(print_status INPUT 'Choice: ')" c
  case $c in
@@ -211,14 +208,16 @@ while true; do
    2) read -p "VM name: " n; start_vm "$n";;
    3) read -p "VM name: " n; stop_vm "$n";;
    4) read -p "VM name: " n; show_vm_info "$n"; read;;
-   5) read -p "VM name: " n; delete_vm "$n";;
-   6) read -p "VM name: " n; resize_vm_disk "$n";;
-   7) read -p "VM name: " n; show_vm_performance "$n"; read;;
+   5) read -p "VM name: " n; edit_vm_config "$n";;
+   6) read -p "VM name: " n; delete_vm "$n";;
+   7) read -p "VM name: " n; resize_vm_disk "$n";;
+   8) read -p "VM name: " n; show_vm_performance "$n"; read;;
    0) exit 0;;
  esac
 done
 }
 
-# === START ===
 check_dependencies
+VM_DIR="$HOME/vms"
+mkdir -p "$VM_DIR"
 main_menu
