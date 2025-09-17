@@ -71,7 +71,7 @@ chmod +x Kobir-Multi-VM.sh
 
 ### 2. Run it
 ```bash
-./kobir-multi-vm.sh
+./Kobir-Multi-VM.sh
 ```
 
 ### 3. Menu Options
